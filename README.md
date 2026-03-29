@@ -39,9 +39,6 @@ Or use the `/mv` slash command (after running `install`):
 ### From the terminal
 
 ```bash
-# Preview what would happen
-uvx claude-mv copy --dry-run /old/path /new/path
-
 # Copy history to match new location
 uvx claude-mv copy /old/path /new/path
 
