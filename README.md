@@ -1,4 +1,4 @@
-# claude-migrate
+# claude-mv
 
 Copy Claude Code conversation history when moving project directories.
 
@@ -6,16 +6,16 @@ When you `mv` a project, Claude Code loses `--continue` history because it's key
 
 ## Quick start
 
-Install the `/migrate` slash command (one-time):
+Install the `/mv` slash command (one-time):
 
 ```bash
-uvx claude-migrate install
+uvx claude-mv install
 ```
 
 Then inside Claude Code:
 
 ```
-/migrate /new/path
+/mv /new/path
 ```
 
 ## Usage
@@ -25,23 +25,23 @@ Then inside Claude Code:
 Using the `!` prefix (no AI overhead):
 
 ```
-! uvx claude-migrate copy "$(pwd)" /new/path
+! uvx claude-mv copy "$(pwd)" /new/path
 ```
 
-Or use the `/migrate` slash command (after running `install`):
+Or use the `/mv` slash command (after running `install`):
 
 ```
-/migrate /new/path
+/mv /new/path
 ```
 
 ### From the terminal
 
 ```bash
 # Preview what would happen
-uvx claude-migrate copy --dry-run /old/path /new/path
+uvx claude-mv copy --dry-run /old/path /new/path
 
 # Copy history to match new location
-uvx claude-migrate copy /old/path /new/path
+uvx claude-mv copy /old/path /new/path
 
 # Then continue at the new location
 cd /new/path && claude --continue
