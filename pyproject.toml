@@ -1,5 +1,5 @@
 [project]
-name = "claude-mv"
+name = "claude-migrate"
 version = "0.1.0"
 description = "Copy Claude Code conversation history when moving project directories"
 readme = "README.md"
@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-claude-mv = "claude_mv.cli:main"
+claude-migrate = "claude_migrate.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.2,<0.10.0"]

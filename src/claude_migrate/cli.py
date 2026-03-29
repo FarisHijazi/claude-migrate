@@ -34,7 +34,7 @@ The user has moved (or is about to move) this project to a new directory. Run th
 
 Run this command:
 ```
-uvx claude-mv copy "$(pwd)" "$ARGUMENTS"
+uvx claude-migrate copy "$(pwd)" "$ARGUMENTS"
 ```
 
 After running, tell the user:
@@ -144,10 +144,10 @@ def migrate(old_path: str, new_path: str, *, dry_run: bool = False) -> int:
 
 def install() -> int:
     COMMANDS_DIR.mkdir(parents=True, exist_ok=True)
-    target = COMMANDS_DIR / "mv.md"
+    target = COMMANDS_DIR / "migrate.md"
     target.write_text(SLASH_COMMAND)
-    print(f"Installed /mv slash command to {target}")
-    print("Usage in Claude Code: /mv <new_path>")
+    print(f"Installed /migrate slash command to {target}")
+    print("Usage in Claude Code: /migrate <new_path>")
     return 0
 
 
@@ -162,7 +162,7 @@ def main():
     copy_p.add_argument("new_path", help="New project directory path")
     copy_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
 
-    sub.add_parser("install", help="Install the /mv slash command for Claude Code")
+    sub.add_parser("install", help="Install the /migrate slash command for Claude Code")
 
     args = parser.parse_args()
     if args.command == "copy":

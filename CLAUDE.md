@@ -1,11 +1,11 @@
-# claude-mv
+# claude-migrate
 
 Simple CLI tool to copy Claude Code conversation history when moving project directories.
 
 ## Structure
 
 ```
-src/claude_mv/
+src/claude_migrate/
   __init__.py    # empty
   cli.py         # all logic: encode_path, migrate, append_migration_notice, install
 ```
@@ -16,6 +16,6 @@ Claude Code encodes paths by replacing both `/` and `.` with `-`.
 
 ## Install
 
-- `uvx claude-mv install` to set up the `/mv` slash command
-- `uvx claude-mv copy <old> <new>` to run directly
+- `uvx claude-migrate install` to set up the `/migrate` slash command
+- `uvx claude-migrate copy <old> <new>` to run directly
 - `uv sync` for local dev
