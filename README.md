@@ -9,6 +9,8 @@ When you `mv` a project, Claude Code loses `--continue` history because it's key
 Install the `/mv` slash command (one-time):
 
 ```bash
+# install `uv` if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uvx claude-mv install
 ```
 
