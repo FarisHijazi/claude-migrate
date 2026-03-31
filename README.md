@@ -1,14 +1,15 @@
-# `claude-migrate`
+![`claude-migrate`](./docs/banner.png)
 
-You can finally take your `claude code` history with you when you move/rename projects folders!
-This tool can be used as script or a slash command.
+You can finally take your `claude code` history with you when you move/rename projects folders!  
+
+
+Normally, your history is stored based on the project path, if you rename it you lose the ability to `--resume` or `--continue`.  
+This tool copies the history from claude's internal files in `~/.claude/projects/...`.
 
 ![claude-migrate](./docs/demo-recording-600-fast.gif)
 
-Normally, your history is stored based on the project path, if you rename it you lose the ability to `--resume` or `--continue`.  
-This tool copies the history from `~/.claude/projects/location1/` to `~/.claude/projects/location2/`.
 
-## Quick start
+## Quick start (/slash command)
 
 1. Install the `/migrate` slash command (one-time):
 
@@ -23,6 +24,8 @@ uvx claude-migrate install-slash-command
 ```
 /migrate /new/path
 ```
+
+3. Create the new path `cp -r /old/path /new/path` (this can either be done before or after step 2)
 
 ## CLI Usage
 
