@@ -16,6 +16,6 @@ Claude Code encodes paths by replacing both `/` and `.` with `-`.
 
 ## Install
 
-- `uvx claude-migrate install` to set up the `/migrate` slash command
-- `uvx claude-migrate copy <old> <new>` to run directly
+- `uvx claude-migrate install-slash-command` to set up the `/migrate` slash command
+- `uvx claude-migrate cp <old> <new>` to run directly
 - `uv sync` for local dev

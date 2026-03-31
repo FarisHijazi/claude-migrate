@@ -1,59 +1,66 @@
-# claude-migrate
+# `claude-migrate`
 
-Copy Claude Code conversation history when moving project directories.
+You can finally take your `claude code` history with you when you move/rename projects folders!
+This tool can be used as script or a slash command.
 
-When you `mv` a project, Claude Code loses `--continue` history because it's keyed by the absolute path. This tool copies `~/.claude/projects/<old-encoded>/` to `~/.claude/projects/<new-encoded>/` and appends a migration notice to the latest session.
+![claude-migrate](./docs/demo-recording-600-fast.gif)
+
+Normally, your history is stored based on the project path, if you rename it you lose the ability to `--resume` or `--continue`.  
+This tool copies the history from `~/.claude/projects/location1/` to `~/.claude/projects/location2/`.
 
 ## Quick start
 
-Install the `/migrate` slash command (one-time):
+1. Install the `/migrate` slash command (one-time):
 
 ```bash
-# install `uv` if you haven't already
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uvx claude-migrate install
+# install `uv` and `uvx` if you haven't already
+# curl -LsSf https://astral.sh/uv/install.sh | sh
+uvx claude-migrate install-slash-command
 ```
 
-Then inside Claude Code:
-
-```
-/migrate /new/path
-```
-
-## Usage
-
-### From inside Claude Code
-
-Using the `!` prefix (no AI overhead):
-
-```
-! uvx claude-migrate copy "$(pwd)" /new/path
-```
-
-Or use the `/migrate` slash command (after running `install`):
+2. Then inside Claude Code in the old location:
 
 ```
 /migrate /new/path
 ```
 
-### From the terminal
+## CLI Usage
 
 ```bash
 # Preview what would happen
-uvx claude-migrate copy --dry-run /old/path /new/path
+uvx claude-migrate cp /old/path /new/path
 
-# Copy history to match new location
-uvx claude-migrate copy /old/path /new/path
+# Move history (copy + delete old)
+uvx claude-migrate mv /old/path /new/path
 
 # Then continue at the new location
 cd /new/path && claude --continue
 ```
 
+### Quick tip
+
+Using the CLI inside Claude Code with the `!` prefix (no AI overhead):
+
+```
+! uvx claude-migrate cp "$(pwd)" /new/path
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `cp <old> <new>` | Copy history (keeps original) |
+| `mv <old> <new>` | Move history (removes original) |
+| `rm <path>` | Remove history for a directory |
+| `install-slash-command` | Install the `/migrate` slash command |
+
+All commands support `--dry-run` / `-n`.
+
 ## How it works
 
 1. Claude Code encodes project paths by replacing `/` and `.` with `-` (e.g. `/home/user/project` -> `-home-user-project`)
 2. History lives at `~/.claude/projects/<encoded-path>/` as JSONL files
-3. This tool copies that directory to the new encoded path
+3. `cp`/`mv` copies the history directory to the new encoded path
 4. Appends a user message to the latest session noting the path change, so Claude knows files moved
 
 ## Reference

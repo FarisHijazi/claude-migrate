@@ -1,46 +1,27 @@
 #!/usr/bin/env python3
-"""Copy Claude Code conversation history to match a moved project directory.
+"""Manage Claude Code conversation history when moving/copying project directories.
 
 When you move/copy a project directory, Claude Code loses track of its
 conversation history because it's keyed by encoded absolute path.
-This copies ~/.claude/projects/<old-encoded>/ to
+This tool copies/moves ~/.claude/projects/<old-encoded>/ to
 ~/.claude/projects/<new-encoded>/ and appends a migration notice to
 the most recent session so Claude knows paths have changed.
 """
 
 import argparse
+import importlib.resources
 import json
+import os
 import shutil
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
-COMMANDS_DIR = Path.home() / ".claude" / "commands"
-
-SLASH_COMMAND = """\
----
-argument-hint: <new_path>
-description: Migrate conversation history after moving this project to a new directory
----
-
-# Migrate Claude Code History
-
-The user has moved (or is about to move) this project to a new directory. Run the migration script to copy the conversation history so `claude --continue` works at the new location.
-
-**Old path (current):** The current working directory (use `pwd`)
-**New path:** $ARGUMENTS
-
-Run this command:
-```
-uvx claude-migrate copy "$(pwd)" "$ARGUMENTS"
-```
-
-After running, tell the user:
-1. The history has been copied
-2. They can now `cd $ARGUMENTS && claude --continue` to resume
-"""
+CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+PROJECTS_DIR = CLAUDE_DIR / "projects"
+COMMANDS_DIR = CLAUDE_DIR / "commands"
+SLASH_COMMAND = importlib.resources.files("claude_migrate").joinpath("migrate.md").read_text()
 
 
 def encode_path(p: str) -> str:
@@ -104,14 +85,15 @@ def append_migration_notice(session_file: Path, old_path: str, new_path: str, dr
     return True
 
 
-def migrate(old_path: str, new_path: str, *, dry_run: bool = False) -> int:
+def migrate(old_path: str, new_path: str, *, dry_run: bool = False, delete_old: bool = False) -> int:
     old_resolved = str(Path(old_path).resolve())
     new_resolved = str(Path(new_path).resolve())
     old_history = PROJECTS_DIR / encode_path(old_path)
     new_history = PROJECTS_DIR / encode_path(new_path)
+    action = "Moving" if delete_old else "Copying"
     prefix = "[DRY RUN] " if dry_run else ""
 
-    print(f"{prefix}Copying Claude Code history:")
+    print(f"{prefix}{action} Claude Code history:")
     print(f"  {old_resolved} -> {new_resolved}")
     print(f"  {old_history}")
     print(f"  {new_history}")
@@ -138,6 +120,38 @@ def migrate(old_path: str, new_path: str, *, dry_run: bool = False) -> int:
         notice_target = latest if dry_run else new_history / latest.name
         append_migration_notice(notice_target, old_resolved, new_resolved, dry_run)
 
+    if delete_old:
+        if dry_run:
+            print(f"  Would remove old history dir")
+        else:
+            shutil.rmtree(old_history)
+            print(f"  Removed old history dir")
+
+    print(f"\n{prefix}Done.")
+    return 0
+
+
+def remove(path: str, *, dry_run: bool = False) -> int:
+    resolved = str(Path(path).resolve())
+    history = PROJECTS_DIR / encode_path(path)
+    prefix = "[DRY RUN] " if dry_run else ""
+
+    print(f"{prefix}Removing Claude Code history for:")
+    print(f"  {resolved}")
+    print(f"  {history}")
+    print()
+
+    if not history.is_dir():
+        print(f"  No history found at {history}")
+        return 1
+
+    n_files = sum(1 for f in history.rglob("*") if f.is_file())
+    if dry_run:
+        print(f"  Would remove {n_files} files")
+    else:
+        shutil.rmtree(history)
+        print(f"  Removed {n_files} files")
+
     print(f"\n{prefix}Done.")
     return 0
 
@@ -157,17 +171,30 @@ def main():
     )
     sub = parser.add_subparsers(dest="command")
 
-    copy_p = sub.add_parser("copy", help="Copy conversation history to match a moved project directory")
-    copy_p.add_argument("old_path", help="Original project directory path")
-    copy_p.add_argument("new_path", help="New project directory path")
-    copy_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
+    cp_p = sub.add_parser("cp", help="Copy history to match a moved project directory (keeps original)")
+    cp_p.add_argument("old_path", help="Original project directory path")
+    cp_p.add_argument("new_path", help="New project directory path")
+    cp_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
 
-    sub.add_parser("install", help="Install the /migrate slash command for Claude Code")
+    mv_p = sub.add_parser("mv", help="Move history to match a moved project directory (removes original)")
+    mv_p.add_argument("old_path", help="Original project directory path")
+    mv_p.add_argument("new_path", help="New project directory path")
+    mv_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
+
+    rm_p = sub.add_parser("rm", help="Remove history for a project directory")
+    rm_p.add_argument("path", help="Project directory path whose history to remove")
+    rm_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
+
+    sub.add_parser("install-slash-command", help="Install the /migrate slash command for Claude Code")
 
     args = parser.parse_args()
-    if args.command == "copy":
+    if args.command == "cp":
         sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run))
-    elif args.command == "install":
+    elif args.command == "mv":
+        sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run, delete_old=True))
+    elif args.command == "rm":
+        sys.exit(remove(args.path, dry_run=args.dry_run))
+    elif args.command == "install-slash-command":
         sys.exit(install())
     else:
         parser.print_help()
