@@ -16,7 +16,7 @@ This tool copies the history from claude's internal files in `~/.claude/projects
 ```bash
 # install `uv` and `uvx` if you haven't already
 # curl -LsSf https://astral.sh/uv/install.sh | sh
-uvx claude-migrate install-slash-command
+uvx git+https://github.com/FarisHijazi/claude-migrate install-slash-command
 ```
 
 2. Then inside Claude Code in the old location:
@@ -31,10 +31,10 @@ uvx claude-migrate install-slash-command
 
 ```bash
 # Preview what would happen
-uvx claude-migrate cp /old/path /new/path
+uvx git+https://github.com/FarisHijazi/claude-migrate cp /old/path /new/path
 
 # Move history (copy + delete old)
-uvx claude-migrate mv /old/path /new/path
+uvx git+https://github.com/FarisHijazi/claude-migrate mv /old/path /new/path
 
 # Then continue at the new location
 cd /new/path && claude --continue
