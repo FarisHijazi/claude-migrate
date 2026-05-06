@@ -9,11 +9,15 @@ the most recent session so Claude knows paths have changed.
 """
 
 import argparse
+import filecmp
 import importlib.resources
 import json
 import os
+import platform
 import shutil
 import sys
+import tarfile
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,6 +160,182 @@ def remove(path: str, *, dry_run: bool = False) -> int:
     return 0
 
 
+def smart_merge_file(src: Path, dst: Path) -> str:
+    """Merge a single file. Returns: 'added', 'identical', 'upgraded', 'kept', or 'conflict'."""
+    if not dst.exists():
+        shutil.copy2(src, dst)
+        return "added"
+
+    if filecmp.cmp(src, dst, shallow=False):
+        return "identical"
+
+    if src.suffix == ".jsonl":
+        src_size = src.stat().st_size
+        dst_size = dst.stat().st_size
+        if src_size > dst_size:
+            with open(dst, "rb") as d, open(src, "rb") as s:
+                existing = d.read()
+                if s.read(len(existing)) == existing:
+                    shutil.copy2(src, dst)
+                    return "upgraded"
+        elif dst_size > src_size:
+            with open(src, "rb") as s, open(dst, "rb") as d:
+                incoming = s.read()
+                if d.read(len(incoming)) == incoming:
+                    return "kept"
+        shutil.copy2(src, Path(str(dst) + ".incoming"))
+        return "conflict"
+
+    if src.suffix == ".json":
+        if src.stat().st_mtime > dst.stat().st_mtime:
+            shutil.copy2(src, dst)
+            return "upgraded"
+        return "kept"
+
+    shutil.copy2(src, Path(str(dst) + ".incoming"))
+    return "conflict"
+
+
+def rewrite_paths(directory: Path, old_path: str, new_path: str) -> None:
+    """Replace all occurrences of old_path with new_path in JSON/JSONL files."""
+    for f in directory.rglob("*"):
+        if f.is_file() and f.suffix in (".json", ".jsonl"):
+            content = f.read_text()
+            if old_path in content:
+                f.write_text(content.replace(old_path, new_path))
+
+
+def export_history(project_path: str, output_dir: str = ".", *, dry_run: bool = False) -> int:
+    resolved = str(Path(project_path).resolve())
+    encoded = encode_path(project_path)
+    history_dir = PROJECTS_DIR / encoded
+
+    if not history_dir.is_dir():
+        print(f"No history found for {resolved}")
+        print(f"  (looked in {history_dir})")
+        return 1
+
+    with tempfile.TemporaryDirectory() as tmp:
+        staging = Path(tmp)
+
+        meta = {
+            "original_path": resolved,
+            "encoded_name": encoded,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "hostname": platform.node(),
+        }
+        (staging / "migrate-meta.json").write_text(json.dumps(meta, indent=2))
+
+        shutil.copytree(history_dir, staging / "project-history")
+
+        sessions_dir = staging / "sessions"
+        sessions_dir.mkdir()
+        for f in (CLAUDE_DIR / "sessions").glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+                if data.get("cwd", "").startswith(resolved):
+                    shutil.copy2(f, sessions_dir / f.name)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        output = Path(output_dir)
+        basename = Path(resolved).name
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        archive_path = output / f"claude-history-{basename}-{timestamp}.tar.gz"
+
+        if dry_run:
+            n = sum(1 for p in staging.rglob("*") if p.is_file())
+            print(f"[DRY RUN] Would archive {n} files to {archive_path}")
+        else:
+            output.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(str(staging), arcname=".")
+            size_kb = archive_path.stat().st_size / 1024
+            print(f"Exported to: {archive_path} ({size_kb:.1f} KB)")
+            print(f"\nTo import on another machine:")
+            print(f"  uvx claude-migrate import {archive_path.name} <project_path>")
+
+    return 0
+
+
+def import_history(archive_path: str, target_path: str | None = None, *, dry_run: bool = False) -> int:
+    archive = Path(archive_path)
+    if not archive.is_file():
+        print(f"Archive not found: {archive}")
+        return 1
+
+    target = str(Path(target_path).resolve()) if target_path else str(Path.cwd())
+    encoded = encode_path(target)
+    dest = PROJECTS_DIR / encoded
+
+    with tempfile.TemporaryDirectory() as tmp:
+        import_dir = Path(tmp)
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(import_dir)
+
+        meta_file = import_dir / "migrate-meta.json"
+        original_path = ""
+        if meta_file.exists():
+            meta = json.loads(meta_file.read_text())
+            original_path = meta.get("original_path", "")
+            print(f"Source: {meta.get('hostname', 'unknown')} ({original_path})")
+            print(f"Exported: {meta.get('exported_at', 'unknown')}")
+        else:
+            print("Warning: no metadata found in archive")
+
+        src_dir = import_dir / "project-history"
+        if not src_dir.is_dir():
+            print("Error: archive missing project-history directory")
+            return 1
+
+        if original_path and original_path != target:
+            print(f"Rewriting paths: {original_path} -> {target}")
+            rewrite_paths(src_dir, original_path, target)
+            sessions_dir = import_dir / "sessions"
+            if sessions_dir.is_dir():
+                rewrite_paths(sessions_dir, original_path, target)
+
+        dest.mkdir(parents=True, exist_ok=True)
+        stats: dict[str, int] = {"added": 0, "identical": 0, "upgraded": 0, "kept": 0, "conflict": 0}
+
+        for src_file in src_dir.rglob("*"):
+            if not src_file.is_file():
+                continue
+            rel = src_file.relative_to(src_dir)
+            dst_file = dest / rel
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+
+            if dry_run:
+                print(f"  [DRY RUN] would merge: {rel}")
+            else:
+                status = smart_merge_file(src_file, dst_file)
+                stats[status] += 1
+                if status not in ("identical", "kept"):
+                    print(f"  {status}: {rel}")
+
+        sessions_src = import_dir / "sessions"
+        if sessions_src.is_dir():
+            sessions_dst = CLAUDE_DIR / "sessions"
+            sessions_dst.mkdir(parents=True, exist_ok=True)
+            for f in sessions_src.glob("*"):
+                if not (sessions_dst / f.name).exists():
+                    shutil.copy2(f, sessions_dst / f.name)
+                    stats["added"] += 1
+
+        if not dry_run:
+            print(f"\nMerge result:")
+            for k, v in stats.items():
+                if v:
+                    print(f"  {k}: {v}")
+            if stats["conflict"]:
+                print(f"\n⚠ {stats['conflict']} conflict(s) saved as .incoming files")
+
+        print(f"\nTarget: {dest}")
+        print(f"You can now: cd {target} && claude --continue")
+
+    return 0
+
+
 def install() -> int:
     COMMANDS_DIR.mkdir(parents=True, exist_ok=True)
     target = COMMANDS_DIR / "migrate.md"
@@ -185,6 +365,16 @@ def main():
     rm_p.add_argument("path", help="Project directory path whose history to remove")
     rm_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
 
+    ex_p = sub.add_parser("export", help="Export project history to a portable .tar.gz archive")
+    ex_p.add_argument("project_path", nargs="?", default=".", help="Project directory (default: cwd)")
+    ex_p.add_argument("-o", "--output", default=".", help="Output directory for the archive (default: cwd)")
+    ex_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
+
+    im_p = sub.add_parser("import", aliases=["merge"], help="Import and smart-merge history from an archive")
+    im_p.add_argument("archive", help="Path to .tar.gz archive")
+    im_p.add_argument("target_path", nargs="?", help="Target project directory (default: cwd)")
+    im_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
+
     sub.add_parser("install-slash-command", help="Install the /migrate slash command for Claude Code")
 
     args = parser.parse_args()
@@ -194,6 +384,10 @@ def main():
         sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run, delete_old=True))
     elif args.command == "rm":
         sys.exit(remove(args.path, dry_run=args.dry_run))
+    elif args.command == "export":
+        sys.exit(export_history(args.project_path, args.output, dry_run=args.dry_run))
+    elif args.command in ("import", "merge"):
+        sys.exit(import_history(args.archive, args.target_path, dry_run=args.dry_run))
     elif args.command == "install-slash-command":
         sys.exit(install())
     else:
