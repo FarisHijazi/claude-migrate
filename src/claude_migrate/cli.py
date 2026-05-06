@@ -89,7 +89,36 @@ def append_migration_notice(session_file: Path, old_path: str, new_path: str, dr
     return True
 
 
-def migrate(old_path: str, new_path: str, *, dry_run: bool = False, delete_old: bool = False) -> int:
+def merge_trees(src: Path, dst: Path, *, dry_run: bool = False) -> dict[str, int]:
+    """Smart-merge src tree into dst using append-only-aware logic."""
+    dst.mkdir(parents=True, exist_ok=True)
+    stats: dict[str, int] = {"added": 0, "identical": 0, "upgraded": 0, "kept": 0, "conflict": 0}
+    for src_file in src.rglob("*"):
+        if not src_file.is_file():
+            continue
+        rel = src_file.relative_to(src)
+        dst_file = dst / rel
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+        if dry_run:
+            print(f"  [DRY RUN] would merge: {rel}")
+        else:
+            status = smart_merge_file(src_file, dst_file)
+            stats[status] += 1
+            if status not in ("identical", "kept"):
+                print(f"  {status}: {rel}")
+    return stats
+
+
+def print_merge_stats(stats: dict[str, int]) -> None:
+    print(f"\nMerge result:")
+    for k, v in stats.items():
+        if v:
+            print(f"  {k}: {v}")
+    if stats.get("conflict"):
+        print(f"\n⚠ {stats['conflict']} conflict(s) saved as .incoming files")
+
+
+def migrate(old_path: str, new_path: str, *, dry_run: bool = False, delete_old: bool = False, merge: bool = False) -> int:
     old_resolved = str(Path(old_path).resolve())
     new_resolved = str(Path(new_path).resolve())
     old_history = PROJECTS_DIR / encode_path(old_path)
@@ -107,16 +136,23 @@ def migrate(old_path: str, new_path: str, *, dry_run: bool = False, delete_old: 
         print(f"  No history found at {old_history}")
         return 1
 
-    if new_history.exists():
+    if new_history.exists() and not merge:
         print(f"  WARNING: {new_history} already exists, skipping to avoid data loss.")
+        print(f"  Use --merge to smart-merge into existing history.")
         return 1
 
-    n_files = sum(1 for f in old_history.rglob("*") if f.is_file())
-    if dry_run:
-        print(f"  Would copy {n_files} files")
+    if new_history.exists() and merge:
+        print(f"  Destination exists, merging...")
+        stats = merge_trees(old_history, new_history, dry_run=dry_run)
+        if not dry_run:
+            print_merge_stats(stats)
     else:
-        shutil.copytree(old_history, new_history)
-        print(f"  Copied {n_files} files")
+        n_files = sum(1 for f in old_history.rglob("*") if f.is_file())
+        if dry_run:
+            print(f"  Would copy {n_files} files")
+        else:
+            shutil.copytree(old_history, new_history)
+            print(f"  Copied {n_files} files")
 
     target = new_history if not dry_run else old_history
     latest = find_latest_session(target)
@@ -295,23 +331,7 @@ def import_history(archive_path: str, target_path: str | None = None, *, dry_run
             if sessions_dir.is_dir():
                 rewrite_paths(sessions_dir, original_path, target)
 
-        dest.mkdir(parents=True, exist_ok=True)
-        stats: dict[str, int] = {"added": 0, "identical": 0, "upgraded": 0, "kept": 0, "conflict": 0}
-
-        for src_file in src_dir.rglob("*"):
-            if not src_file.is_file():
-                continue
-            rel = src_file.relative_to(src_dir)
-            dst_file = dest / rel
-            dst_file.parent.mkdir(parents=True, exist_ok=True)
-
-            if dry_run:
-                print(f"  [DRY RUN] would merge: {rel}")
-            else:
-                status = smart_merge_file(src_file, dst_file)
-                stats[status] += 1
-                if status not in ("identical", "kept"):
-                    print(f"  {status}: {rel}")
+        stats = merge_trees(src_dir, dest, dry_run=dry_run)
 
         sessions_src = import_dir / "sessions"
         if sessions_src.is_dir():
@@ -323,12 +343,7 @@ def import_history(archive_path: str, target_path: str | None = None, *, dry_run
                     stats["added"] += 1
 
         if not dry_run:
-            print(f"\nMerge result:")
-            for k, v in stats.items():
-                if v:
-                    print(f"  {k}: {v}")
-            if stats["conflict"]:
-                print(f"\n⚠ {stats['conflict']} conflict(s) saved as .incoming files")
+            print_merge_stats(stats)
 
         print(f"\nTarget: {dest}")
         print(f"You can now: cd {target} && claude --continue")
@@ -354,11 +369,13 @@ def main():
     cp_p = sub.add_parser("cp", help="Copy history to match a moved project directory (keeps original)")
     cp_p.add_argument("old_path", help="Original project directory path")
     cp_p.add_argument("new_path", help="New project directory path")
+    cp_p.add_argument("--merge", "-m", action="store_true", help="Smart-merge if destination already has history")
     cp_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
 
     mv_p = sub.add_parser("mv", help="Move history to match a moved project directory (removes original)")
     mv_p.add_argument("old_path", help="Original project directory path")
     mv_p.add_argument("new_path", help="New project directory path")
+    mv_p.add_argument("--merge", "-m", action="store_true", help="Smart-merge if destination already has history")
     mv_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
 
     rm_p = sub.add_parser("rm", help="Remove history for a project directory")
@@ -379,9 +396,9 @@ def main():
 
     args = parser.parse_args()
     if args.command == "cp":
-        sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run))
+        sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run, merge=args.merge))
     elif args.command == "mv":
-        sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run, delete_old=True))
+        sys.exit(migrate(args.old_path, args.new_path, dry_run=args.dry_run, delete_old=True, merge=args.merge))
     elif args.command == "rm":
         sys.exit(remove(args.path, dry_run=args.dry_run))
     elif args.command == "export":
