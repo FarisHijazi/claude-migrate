@@ -25,7 +25,10 @@ from pathlib import Path
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 PROJECTS_DIR = CLAUDE_DIR / "projects"
 COMMANDS_DIR = CLAUDE_DIR / "commands"
-SLASH_COMMAND = importlib.resources.files("claude_migrate").joinpath("migrate.md").read_text()
+SKILLS_DIR = CLAUDE_DIR / "skills"
+# Read lazily: a module-level read makes an unrelated subcommand fail at import time
+# if the packaged resource is ever missing.
+SKILL_FILES = ("SKILL.md", "references/platform-notes.md")
 
 
 def encode_path(p: str) -> str:
@@ -196,6 +199,31 @@ def remove(path: str, *, dry_run: bool = False) -> int:
     return 0
 
 
+def uuid_spine(path: Path) -> list[str]:
+    """The ordered uuids of a transcript — its identity, independent of byte content.
+
+    Transcripts are append-only, so one session's spine being a prefix of another's
+    means the longer file is literally the same conversation, continued. Unlike a byte
+    compare this survives path rewriting: an imported transcript has every embedded
+    path replaced, so it shares not one byte with its own earlier copy while remaining
+    the same conversation. That is why a plain prefix test reports 'conflict' on files
+    that only differ by the rewrite.
+    """
+    spine: list[str] = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    val = json.loads(line).get("uuid")
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+                if val:
+                    spine.append(val)
+    except OSError:
+        return []
+    return spine
+
+
 def smart_merge_file(src: Path, dst: Path) -> str:
     """Merge a single file. Returns: 'added', 'identical', 'upgraded', 'kept', or 'conflict'."""
     if not dst.exists():
@@ -219,6 +247,22 @@ def smart_merge_file(src: Path, dst: Path) -> str:
                 incoming = s.read()
                 if d.read(len(incoming)) == incoming:
                     return "kept"
+
+        # Same test, on the uuid spine instead of raw bytes, so it still fires after
+        # the paths have been rewritten. A strictly shorter transcript whose spine is
+        # a prefix of the other is an earlier state of that same session: the longer
+        # file already contains it exactly, so keeping both would only ever mean
+        # keeping a stale copy. Drop the shorter one.
+        # Equal-length spines are NOT a proper subset - the two sides diverged, or
+        # differ only by the rewrite - so those still become a conflict for a human.
+        src_spine, dst_spine = uuid_spine(src), uuid_spine(dst)
+        if src_spine and dst_spine:
+            if len(src_spine) > len(dst_spine) and src_spine[:len(dst_spine)] == dst_spine:
+                shutil.copy2(src, dst)
+                return "upgraded"
+            if len(dst_spine) > len(src_spine) and dst_spine[:len(src_spine)] == src_spine:
+                return "kept"
+
         shutil.copy2(src, Path(str(dst) + ".incoming"))
         return "conflict"
 
@@ -352,11 +396,29 @@ def import_history(archive_path: str, target_path: str | None = None, *, dry_run
 
 
 def install() -> int:
-    COMMANDS_DIR.mkdir(parents=True, exist_ok=True)
-    target = COMMANDS_DIR / "migrate.md"
-    target.write_text(SLASH_COMMAND)
-    print(f"Installed /migrate slash command to {target}")
-    print("Usage in Claude Code: /migrate <new_path>")
+    """Install /migrate as a SKILL, not a bare slash command.
+
+    A skill carries its own reference files and triggers on description, so one artifact
+    covers same-machine moves, cross-machine moves and the whole-setup case. Shipping
+    both a command and a skill named `migrate` means two things answer to /migrate and
+    they drift apart - which is exactly what happened before.
+    """
+    root = SKILLS_DIR / "migrate"
+    src = importlib.resources.files("claude_migrate").joinpath("skill")
+    for rel in SKILL_FILES:
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(src.joinpath(rel).read_text())
+        print(f"Installed {target}")
+
+    # A stale command file shadows nothing but confuses everyone, including Claude.
+    legacy = COMMANDS_DIR / "migrate.md"
+    if legacy.exists():
+        print(f"\n⚠ {legacy} also exists and now duplicates this skill.")
+        print("  Remove it so /migrate resolves to one thing:")
+        print(f"    rm {legacy}")
+
+    print("\nUsage in Claude Code: /migrate <new_path> | [user@]host:<new_path>")
     return 0
 
 
@@ -392,7 +454,13 @@ def main():
     im_p.add_argument("target_path", nargs="?", help="Target project directory (default: cwd)")
     im_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
 
-    sub.add_parser("install-slash-command", help="Install the /migrate slash command for Claude Code")
+    sy_p = sub.add_parser("sync", help="Two-way sync of history with peers in ~/.claude/history-sync.json")
+    sy_p.add_argument("--interval", type=int, metavar="SEC", help="Loop forever, every SEC seconds")
+    sy_p.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
+    sy_p.add_argument("--verbose", "-v", action="store_true", help="Report peers with nothing to do")
+
+    sub.add_parser("install-skill", aliases=["install-slash-command"],
+                   help="Install the /migrate skill into ~/.claude/skills (or use the plugin marketplace)")
 
     args = parser.parse_args()
     if args.command == "cp":
@@ -405,7 +473,12 @@ def main():
         sys.exit(export_history(args.project_path, args.output, dry_run=args.dry_run))
     elif args.command in ("import", "merge"):
         sys.exit(import_history(args.archive, args.target_path, dry_run=args.dry_run))
-    elif args.command == "install-slash-command":
+    elif args.command == "sync":
+        # Imported lazily: sync needs fcntl, which does not exist on Windows.
+        # A top-level import would break every OTHER subcommand there too.
+        from claude_migrate import sync
+        sys.exit(sync.run(args))
+    elif args.command in ("install-skill", "install-slash-command"):
         sys.exit(install())
     else:
         parser.print_help()
