@@ -30,6 +30,13 @@ direction and not the other — **`uv_build` refuses to follow a symlinked direc
 fails the build with `Is a directory (os error 21)`. Verified by building the wheel and
 listing it; do that again if you ever move these files.
 
+Both halves are verified, not assumed: the wheel was built and listed to confirm it holds
+real files, and a symlinked skill directory was dropped into `~/.claude/skills/` to
+confirm the loader follows it. **Known limit:** a Windows checkout without
+`core.symlinks` writes the link as a text file, so the plugin's skill would not load
+there. The `uvx … install-skill` path still works on Windows, since the wheel carries
+real files.
+
 ## Key details
 
 - Claude Code encodes project paths by replacing `/` and `.` with `-`, so history is

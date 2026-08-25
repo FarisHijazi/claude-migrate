@@ -99,6 +99,10 @@ def merge_trees(src: Path, dst: Path, *, dry_run: bool = False) -> dict[str, int
     for src_file in src.rglob("*"):
         if not src_file.is_file():
             continue
+        # Belt and braces with the export-side filter: a .incoming is a local merge
+        # artifact. Merging one can only ever create .incoming.incoming.
+        if ".incoming" in src_file.name:
+            continue
         rel = src_file.relative_to(src)
         dst_file = dst / rel
         dst_file.parent.mkdir(parents=True, exist_ok=True)
@@ -306,7 +310,14 @@ def export_history(project_path: str, output_dir: str = ".", *, dry_run: bool = 
         }
         (staging / "migrate-meta.json").write_text(json.dumps(meta, indent=2))
 
-        shutil.copytree(history_dir, staging / "project-history")
+        # NEVER ship .incoming files. They are local merge artifacts, not history, and
+        # they live inside the history directory - so exporting them sends a conflict to
+        # the other machine, where it conflicts again and comes back as
+        # .incoming.incoming, one level deeper per run, until the filename passes 255
+        # bytes and every import for the project dies with Errno 36. Observed live at 9
+        # levels and 75 files across 10 projects.
+        shutil.copytree(history_dir, staging / "project-history",
+                        ignore=shutil.ignore_patterns("*.incoming*"))
 
         sessions_dir = staging / "sessions"
         sessions_dir.mkdir()
