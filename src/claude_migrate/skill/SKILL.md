@@ -50,11 +50,20 @@ Always the git URL. **Never `uvx claude-migrate`** (the PyPI build lags and has 
 **Same machine:**
 
 ```bash
-uvx git+https://github.com/FarisHijazi/claude-migrate cp "$(pwd)" "<new_path>"
+uvx git+https://github.com/FarisHijazi/claude-migrate migrate "$(pwd)" "<new_path>"
 ```
 
-`mv` instead of `cp` drops the old copy. `--merge` if the destination already has history.
-`--dry-run` first.
+`--dry-run` first. `--merge` if the destination already has history. (`cp` and `mv` still
+work, but are deprecated aliases of `migrate` and `migrate --delete-history`.)
+
+To move the project **folder** as well as its history, add `--folder`, plus any of:
+
+| Flag | Effect |
+|---|---|
+| `--delete-history` | Move the history instead of copying it |
+| `--delete-dir` | Also delete the source folder (requires `--folder`) |
+| `--replace-userpath[=FROM:TO]` | Rewrite `/Users/<user>` and `/home/<user>` inside chat content; the bare flag auto-detects, `=FROM:TO` overrides |
+| `--replace-references` | Rewrite absolute and relative path references inside chat content |
 
 **Another machine:**
 
