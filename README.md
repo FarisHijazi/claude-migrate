@@ -45,11 +45,15 @@ things answering to `/migrate` drift apart.
 ## CLI Usage
 
 ```bash
-# Preview what would happen
-uvx git+https://github.com/FarisHijazi/claude-migrate cp /old/path /new/path
+# Preview a copy of the history (default behavior, keeps source)
+uvx git+https://github.com/FarisHijazi/claude-migrate migrate /old/path /new/path --dry-run
 
-# Move history (copy + delete old)
-uvx git+https://github.com/FarisHijazi/claude-migrate mv /old/path /new/path
+# Move history (copy + delete source history)
+uvx claude-migrate migrate /old/path /new/path --delete-history
+
+# Move the project folder AND its history in one shot
+uvx claude-migrate migrate /old/path /new/path \
+    --folder --delete-history --delete-dir
 
 # Then continue at the new location
 cd /new/path && claude --continue
@@ -57,25 +61,66 @@ cd /new/path && claude --continue
 
 ### Quick tip
 
-Using the CLI inside Claude Code with the `!` prefix (no AI overhead):
+Inside Claude Code with the `!` prefix (no AI overhead):
 
 ```
-! uvx claude-migrate cp "$(pwd)" /new/path
+! uvx claude-migrate migrate "$(pwd)" /new/path
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `cp <old> <new>` | Copy history (keeps original) |
-| `mv <old> <new>` | Move history (removes original) |
-| `rm <path>` | Remove history for a directory |
-| `export [path] -o <dir>` | Pack a project's history into a portable `.tar.gz` |
-| `import <archive> [path]` | Unpack and smart-merge into the target path |
+| `migrate <old> <new>` | Migrate history (and optionally the folder) between paths |
+| `rm <path>` | Remove history for a directory (add `--folder` to also delete the directory itself) |
+| `export <project_path>` | Export one project's history to a portable `.tar.gz` archive |
+| `export-all` | Export **all** project histories under `~/.claude/projects/` to one archive |
+| `import <archive> [target]` | Unpack and smart-merge into the target path (rewrites paths) |
+| `import-all <archive>` | Import an `export-all` archive into local `~/.claude/projects/` |
 | `sync` | Two-way sync with peers in `~/.claude/history-sync.json` |
+| `user-messages` | Extract just the human-typed messages from the current session |
+| `install-skill` | Install the `/migrate` skill into `~/.claude/skills` |
+| `cp <old> <new>` | Deprecated alias of `migrate` |
+| `mv <old> <new>` | Deprecated alias of `migrate --delete-history` |
 | `install-slash-command` | Install the `/migrate` slash command |
 
 All commands support `--dry-run` / `-n`.
+
+### `migrate` flags
+
+| Flag | Effect |
+|---|---|
+| `--merge`, `-m` | Smart-merge into existing history at the destination |
+| `--folder` | Also copy the actual project folder (errors if destination folder already exists) |
+| `--delete-history` | Delete the source history after copy (move semantics for history) |
+| `--delete-dir` | Delete the source project folder after copy (requires `--folder`) |
+| `--replace-userpath [FROM:TO]` | Rewrite `/Users/<x>/` and `/home/<x>/` in chat content. Bare flag auto-detects; pass `--replace-userpath=alice:bob` to override |
+| `--replace-references` | Walk every JSON/JSONL value in the history and rewrite absolute and relative path references inside chat content (see below) |
+
+### `--replace-references` — how path references are rewritten
+
+When you migrate a project, the chat history is full of path strings inside tool calls and prose. With `--replace-references`, every string value in every JSON/JSONL line is scanned:
+
+- **Absolute paths under the old CWD** are rewritten under the new CWD. Boundary-protected so `/old/cwd` doesn't corrupt `/old/cwdbar`.
+- **Encoded forms** (e.g. `-Users-alice-projects-foo`) are also rewritten.
+- **Relative paths** (`./foo`, `../bar/baz`) are resolved against the old CWD:
+  - If they resolve **inside** the old CWD, they're kept as relative — they still work from the new location.
+  - If they **escape** the old CWD (e.g. `../other/file.py`), they're pinned to the **original absolute path**, because the external file didn't move.
+
+Every unique `before -> after` replacement is printed before being applied. Use `--dry-run` to preview without writing.
+
+### Cross-machine / cross-user
+
+```bash
+# On the source machine
+uvx claude-migrate export-all -o ~/backups/
+
+# Copy the .tar.gz to the target machine, then
+uvx claude-migrate import-all ~/backups/claude-history-ALL-*.tar.gz \
+    --replace-userpath --replace-references
+```
+
+`--replace-userpath` (bare flag) auto-detects the source user from the archive metadata and rewrites `/Users/<src>/` and `/home/<src>/` to your current user, including the encoded directory names. Add `--replace-references` for the deeper content rewrite.
 
 Moving to another machine is `export` -> `scp` -> `import`. Only `import` re-keys the
 folder **and** rewrites the old absolute path inside the transcripts, which is why
@@ -112,12 +157,23 @@ claude-migrate sync --interval 300  # loop
 Set `identity` explicitly — a timer-launched run has no ssh agent. A macOS LaunchAgent
 also needs `PATH` in `EnvironmentVariables`, or `uvx` is not found.
 
-## How merging works
+## How it works
 
 1. Claude Code encodes project paths by replacing `/` and `.` with `-` (e.g. `/home/user/project` -> `-home-user-project`)
 2. History lives at `~/.claude/projects/<encoded-path>/` as JSONL files
-3. `cp`/`mv` copies the history directory to the new encoded path
-4. Appends a user message to the latest session noting the path change, so Claude knows files moved
+3. `migrate` copies the history directory to the new encoded path
+4. With `--replace-references` and/or `--replace-userpath`, it also rewrites string content inside each JSONL/JSON line
+5. Appends a user message to the latest session noting the path change, so Claude knows files moved
+
+## Gotchas
+
+### Renaming a subdirectory has no history to migrate
+
+History is bucketed by the **cwd Claude was launched from**, not by which files a session read or wrote. So if you renamed `~/foo/workspace/old-task/` -> `~/foo/workspace/20260519-task/`, there's no history bucket to move, because Claude was launched from `~/foo/`, never from inside the subdir. The transcripts referencing the old subdir name live inside `~/.claude/projects/-home-user-foo/` as immutable JSONL — they're history, not state, so `migrate` doesn't rewrite them.
+
+When you actually need to migrate: rename the directory you `cd`'d into when running `claude`. That's the one with the `~/.claude/projects/<encoded-path>/` bucket.
+
+If you want path references inside transcripts updated too (so future `--continue` sessions see the new names in scrollback), use `--replace-references` on a migrate command targeting the actual project root.
 
 Per file, `import` reports `added`, `identical`, `upgraded`, `kept` or `conflict`.
 Transcripts are append-only, so **when one side is a strict prefix of the other, the

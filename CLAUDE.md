@@ -1,7 +1,8 @@
 # claude-migrate
 
 CLI + Claude Code plugin for moving conversation history when a project moves — to a new
-path, to another machine, or continuously between two machines.
+path, to another machine, or continuously between two machines. Optionally moves the
+project folder too, and rewrites path references inside the chat content itself.
 
 ## Structure
 
@@ -12,14 +13,17 @@ path, to another machine, or continuously between two machines.
 skills/
   migrate -> ../src/claude_migrate/skill      # SYMLINK, see below
 src/claude_migrate/
-  cli.py               # subcommands, encode_path, smart_merge_file, install
+  cli.py               # subcommands, encode_path, smart_merge_file, content
+                       #   rewriting, export/import(-all), user-messages, install
   sync.py              # `sync`: two-way peer sync. Imported LAZILY (needs fcntl,
                        #   which does not exist on Windows)
-  skill/               # the /migrate skill — THE canonical copy
+  skill/               # the /migrate skill — THE canonical copy. There is no
+                       #   migrate.md slash command any more; the skill replaced it
     SKILL.md
     references/platform-notes.md
 tests/
-  smart_merge_test.py  # uv run --with pytest pytest
+  smart_merge_test.py  # merge semantics — uv run --with pytest pytest
+  cli_features_test.py # content rewriting, export-all/import-all, user-messages, install
 ```
 
 **The skill exists once, at `src/claude_migrate/skill/`, and `skills/migrate` is a
@@ -37,28 +41,36 @@ confirm the loader follows it. **Known limit:** a Windows checkout without
 there. The `uvx … install-skill` path still works on Windows, since the wheel carries
 real files.
 
-## Key details
+## CLI surface
 
-- Claude Code encodes project paths by replacing `/` and `.` with `-`, so history is
-  orphaned by any move. Renaming the directory is only half the job: `import` also
-  rewrites the old absolute path *inside* the transcripts.
-- **`smart_merge_file` compares the uuid spine, not bytes.** `import` rewrites every
-  embedded path, so a transcript can share zero bytes with its own earlier copy while
-  being the same conversation. Transcripts are append-only, so a strictly shorter spine
-  that prefixes the other means the longer file already contains it — drop the shorter.
-  Equal-length or diverged spines stay a `conflict` and get a `.incoming` file.
-- **Never auto-promote `.incoming`.** Measured on real data: some were larger only
-  because they carried unrewritten paths, and one was 159 lines shorter than the file it
-  would have replaced.
-- `install()` installs a **skill**, not a slash command, and warns if a legacy
-  `~/.claude/commands/migrate.md` still exists. Two artifacts named `migrate` drift.
-- `CLAUDE_CONFIG_DIR` overrides `~/.claude` — use it to test `install` without touching
-  your real config.
+Primary command:
+- `migrate <old> <new>` — migrate history; flags below
+  - `--merge` / `-m` — smart-merge into existing destination history
+  - `--folder` — also copy the project folder (errors if destination folder exists)
+  - `--delete-history` — delete source history (move semantics for history)
+  - `--delete-dir` — delete source folder (requires `--folder`)
+  - `--replace-userpath[=FROM:TO]` — rewrite `/Users/<x>/`, `/home/<x>/` and encoded forms
+    in chat content; bare flag auto-detects, `=FROM:TO` overrides
+  - `--replace-references` — rewrite absolute paths under the old CWD and relative paths
+    that escape it; inside-CWD relatives are kept as-is
+  - `--dry-run` / `-n`
 
-## Install / dev
+Other commands:
+- `rm <path>` — remove history; `--folder` also deletes the project folder
+- `export <project_path>` / `export-all` — archive to `.tar.gz`
+- `import <archive> [target]` (alias `merge`) / `import-all <archive>` — restore from
+  archive; both accept `--replace-userpath` and `--replace-references`
+- `sync` — two-way peer sync (see below)
+- `user-messages` — extract human-typed messages from the current session JSONL; flags
+  `--copy`, `-o FILE`, `--session FILE`, `--include-meta`, `--separator STR`
+- `install-skill` (alias `install-slash-command`) — install the `/migrate` skill
+- `cp` / `mv` — deprecated aliases of `migrate` and `migrate --delete-history`
 
-- Plugin: `/plugin marketplace add FarisHijazi/claude-migrate` then
-  `/plugin install claude-migrate@farishijazi`
-- CLI: `uvx git+https://github.com/FarisHijazi/claude-migrate <cmd>` —
-  **always the git URL.** The PyPI build lags and ships no `export`/`import`/`sync`.
-- Dev: `uv sync`; tests `uv run --with pytest pytest`; build check `uv build --wheel`
+## Content rewriting internals
+
+`rewrite_history_content` walks every JSON/JSONL file and parses each line. Every string
+value (recursively) goes through `transform_string`, which applies
+`apply_userpath_to_string` then `apply_references_to_string`. The regex uses a
+positive-lookahead boundary class so `/old/cwd` cannot corrupt `/old/cwdbar`. Each unique
+`before -> after` pair is printed before the write.
+
