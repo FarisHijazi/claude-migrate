@@ -10,7 +10,7 @@ Created `claude-migrate` as a pip-installable Python CLI tool that copies Claude
 
 Claude Code encodes project paths by replacing **both** `/` and `.` with `-`. The gist reference only mentioned `/`, but testing against real encoded dirs confirmed `.` is also replaced. E.g.:
 - `/Users/foo/.claude` → `-Users-foo--claude`
-- `/Users/foo/demaenergy.d` → `-Users-foo-demaenergy-d`
+- `/Users/foo/acme.d` → `-Users-foo-acme-d`
 
 ## Features
 
