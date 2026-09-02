@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Copy Claude Code conversation history when moving project directories"
 readme = "README.md"
 authors = [
-    { name = "Faris Hijazi", email = "f.hijazi@dema-holding.com" }
+    { name = "Faris Hijazi", email = "theefaris@gmail.com" }
 ]
 requires-python = ">=3.12"
 dependencies = []
